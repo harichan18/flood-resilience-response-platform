@@ -3,6 +3,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import mm
+import os
 from reportlab.platypus import (
     SimpleDocTemplate,
     Paragraph,
@@ -20,6 +21,7 @@ from reportlab.platypus import (
 # ============================================================
 
 OUTPUT_FILE = "output/Flood_Resilience_Submission.pdf"
+os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
 
 # ------------------------------------------------------------
 # PDF DOCUMENT
@@ -341,6 +343,7 @@ toc = [
     "3.1 Folder Hierarchy & File Layout",
     "3.2 Key File Responsibilities",
     "3.3 Codebase Navigation Guide",
+    "3.4 Current GitHub Repository Snapshot",
     "",
     "4. Detailed Feature Breakdown & User Workflows",
     "4.1 Security & Credential Management",
@@ -381,7 +384,16 @@ toc = [
     "10.2 Roadmap",
     "10.3 Troubleshooting",
     "10.4 Licensing & Intellectual Property",
-    "10.5 Error Log Book"
+    "10.5 Error Log Book",
+    "",
+    "Appendix A — Core Technology Reference",
+    "Appendix B — Core Coordination Pseudocode",
+    "Appendix C — Submission Integrity",
+    "Appendix D — Executable Database DDL & RLS Reference",
+    "Appendix E — Deployment Configuration Reference",
+    "Appendix F — Environment & Secret Reference",
+    "Appendix G — License Text",
+    "Appendix H — Submission Verification Matrix"
 ]
 
 for item in toc:
@@ -864,6 +876,32 @@ P(
 
 story.append(PageBreak())
 
+
+
+H2("3.4 Current GitHub Repository Snapshot")
+P(
+    "The current repository baseline contains the PDF-generation prototype and "
+    "submission artifacts. The application modules described in the target "
+    "architecture are implementation scope and should be added incrementally."
+)
+add_code(r'''
+flood-resilience-response-platform/
+|
++-- main.py
++-- requirements.txt
++-- README.md
++-- LICENSE
++-- .gitignore
++-- output/
+|   `-- Flood_Resilience_Submission.pdf
+`-- test.pdf
+''')
+P("<b>GitHub:</b> github.com/harichan18/flood-resilience-response-platform")
+P(
+    "The repository baseline is version-controlled on the main branch. "
+    "Future application commits should add frontend, backend, database, "
+    "AI and test modules as they are implemented."
+)
 
 # ============================================================
 # SECTION 4
@@ -2043,6 +2081,333 @@ P(
     "<b>End of Technical Submission — Version 0.1</b>",
     small_style
 )
+
+
+H1("Appendix D — Executable Database DDL & RLS Reference")
+
+P(
+    "This appendix provides a reference PostgreSQL/PostGIS migration for the "
+    "proposed application schema. It is not presented as an already-deployed "
+    "database; it becomes the implementation baseline when the application DB "
+    "is created."
+)
+
+H2("D.1 Complete PostgreSQL DDL")
+add_code(r'''
+create extension if not exists postgis;
+
+create table if not exists users (
+    id uuid primary key references auth.users(id) on delete cascade,
+    role text not null default 'citizen'
+        check (role in ('citizen','volunteer','authority','shelter_operator')),
+    created_at timestamptz not null default now()
+);
+
+create table if not exists zones (
+    id bigserial primary key,
+    name text not null,
+    severity numeric(5,2) not null default 0 check (severity between 0 and 100),
+    priority numeric(8,4) not null default 0,
+    population integer not null default 0 check (population >= 0),
+    vulnerable_population integer not null default 0 check (vulnerable_population >= 0),
+    active_sos integer not null default 0 check (active_sos >= 0),
+    geometry geometry(Polygon,4326),
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists hazards (
+    id bigserial primary key,
+    zone_id bigint references zones(id) on delete set null,
+    type text not null,
+    severity numeric(5,2) not null default 0 check (severity between 0 and 100),
+    description text,
+    geometry geometry(Geometry,4326),
+    reported_at timestamptz not null default now(),
+    expires_at timestamptz
+);
+
+create table if not exists reports (
+    id bigserial primary key,
+    user_id uuid not null references users(id) on delete cascade,
+    zone_id bigint references zones(id) on delete set null,
+    type text not null,
+    severity numeric(5,2) not null default 0 check (severity between 0 and 100),
+    description text,
+    location geometry(Point,4326),
+    status text not null default 'pending'
+        check (status in ('pending','verified','rejected','resolved')),
+    created_at timestamptz not null default now()
+);
+
+create table if not exists resources (
+    id bigserial primary key,
+    type text not null,
+    capability text,
+    availability text not null default 'available'
+        check (availability in ('available','assigned','unavailable')),
+    quantity integer not null default 1 check (quantity > 0),
+    location geometry(Point,4326),
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists volunteer_profiles (
+    user_id uuid primary key references users(id) on delete cascade,
+    skills text[] not null default '{}',
+    availability text not null default 'available',
+    location geometry(Point,4326),
+    equipment text[] not null default '{}'
+);
+
+create table if not exists shelters (
+    id bigserial primary key,
+    name text not null,
+    capacity integer not null check (capacity >= 0),
+    occupancy integer not null default 0 check (occupancy >= 0 and occupancy <= capacity),
+    location geometry(Point,4326) not null,
+    created_at timestamptz not null default now()
+);
+
+create table if not exists resource_assignments (
+    id bigserial primary key,
+    zone_id bigint not null references zones(id) on delete cascade,
+    resource_id bigint references resources(id) on delete set null,
+    volunteer_id uuid references volunteer_profiles(user_id) on delete set null,
+    status text not null default 'recommended'
+        check (status in ('recommended','approved','modified','rejected','completed')),
+    created_by uuid references users(id) on delete set null,
+    created_at timestamptz not null default now()
+);
+
+create table if not exists shelter_checkins (
+    id bigserial primary key,
+    person_id uuid not null references users(id) on delete cascade,
+    shelter_id bigint not null references shelters(id) on delete cascade,
+    status text not null default 'checked_in',
+    checked_in_at timestamptz not null default now(),
+    checked_out_at timestamptz
+);
+
+create index if not exists zones_geometry_gix on zones using gist (geometry);
+create index if not exists hazards_geometry_gix on hazards using gist (geometry);
+create index if not exists reports_location_gix on reports using gist (location);
+create index if not exists resources_location_gix on resources using gist (location);
+create index if not exists shelters_location_gix on shelters using gist (location);
+''')
+
+H2("D.2 Row-Level Security Policies")
+P(
+    "RLS protects user-owned information and separates citizen, volunteer, "
+    "authority and shelter-operator access. These policies are reference "
+    "implementation examples and must be tested against the final schema."
+)
+add_code(r'''
+alter table reports enable row level security;
+alter table volunteer_profiles enable row level security;
+alter table resource_assignments enable row level security;
+alter table shelter_checkins enable row level security;
+
+create policy report_owner_insert
+on reports for insert to authenticated
+with check (user_id = auth.uid());
+
+create policy report_owner_select
+on reports for select
+using (
+    user_id = auth.uid()
+    or exists (
+        select 1 from users u
+        where u.id = auth.uid() and u.role = 'authority'
+    )
+);
+
+create policy volunteer_owner_select
+on volunteer_profiles for select
+using (
+    user_id = auth.uid()
+    or exists (
+        select 1 from users u
+        where u.id = auth.uid() and u.role = 'authority'
+    )
+);
+
+create policy volunteer_owner_update
+on volunteer_profiles for update
+using (user_id = auth.uid())
+with check (user_id = auth.uid());
+
+create policy assignment_authority_insert
+on resource_assignments for insert to authenticated
+with check (
+    exists (
+        select 1 from users u
+        where u.id = auth.uid() and u.role = 'authority'
+    )
+);
+
+create policy assignment_authority_or_volunteer_select
+on resource_assignments for select
+using (
+    volunteer_id = auth.uid()
+    or exists (
+        select 1 from users u
+        where u.id = auth.uid() and u.role = 'authority'
+    )
+);
+
+create policy shelter_checkin_authorized_select
+on shelter_checkins for select
+using (
+    person_id = auth.uid()
+    or exists (
+        select 1 from users u
+        where u.id = auth.uid()
+          and u.role in ('authority','shelter_operator')
+    )
+);
+''')
+
+H2("D.3 Explicit LaTeX Formula Reference")
+add_code(r'''
+Zone priority:
+$$
+P_z = w_A A_z + w_C C_z + w_S S_z + w_H H_z
+$$
+
+Resource suitability:
+$$
+Q_{r,z} =
+w_C C_{r,z} + w_S S_{r,z} + w_A A_r
+- w_D D_{r,z} - w_T T_{r,z}
+$$
+
+Volunteer suitability:
+$$
+V_{v,z} =
+w_K K_{v,z} + w_A A_v - w_D D_{v,z}
+$$
+
+Route hazard penalty:
+$$
+H(R) = \sum_{i=1}^{n} \lambda_i I_i(R)
+$$
+
+Shelter occupancy:
+$$
+O_s = rac{N_s}{C_s}
+$$
+''')
+
+add_table(
+    [
+        ["Variable", "Definition"],
+        ["A_z", "Affected population measure for zone z."],
+        ["C_z", "Critical/vulnerable case measure."],
+        ["S_z", "SOS/emergency request measure."],
+        ["H_z", "Hazard severity measure."],
+        ["w_*", "Non-negative calibration weights."],
+        ["D", "Distance penalty."],
+        ["T", "Estimated travel-time penalty."],
+        ["I_i(R)", "1 when route R intersects hazard i; otherwise 0."],
+        ["lambda_i", "Severity penalty assigned to hazard i."],
+        ["N_s / C_s", "Shelter occupancy divided by shelter capacity."],
+    ],
+    [45*mm, 130*mm],
+    7
+)
+
+H1("Appendix E — Deployment Configuration Reference")
+H2("E.1 Backend Dockerfile")
+add_code(r'''
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+EXPOSE 3000
+CMD ["npm", "start"]
+''')
+
+H2("E.2 Deployment Sequence")
+add_code(r'''
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+
+docker build -t flood-resilience-backend ./backend
+docker run --rm --env-file .env -p 3000:3000 flood-resilience-backend
+''')
+
+H1("Appendix F — Environment & Secret Reference")
+add_table(
+    [
+        ["Variable", "Required", "Acquisition / handling"],
+        ["VITE_MAPBOX_TOKEN", "Yes", "Create Mapbox token; restrict allowed origins."],
+        ["SUPABASE_URL", "Yes", "Copy project URL from Supabase settings."],
+        ["SUPABASE_ANON_KEY", "Yes", "Copy public client key from Supabase API settings."],
+        ["SUPABASE_SERVICE_ROLE_KEY", "Backend only", "Copy server secret; never expose in frontend."],
+        ["API_BASE_URL", "Yes", "Set to local or deployed API address."],
+        ["YOLO_MODEL_PATH", "AI service", "Path to the selected YOLO model file."],
+    ],
+    [48*mm, 35*mm, 92*mm],
+    6.7
+)
+
+H1("Appendix G — License Text")
+P(
+    "Use the following MIT text only if the repository LICENSE file is actually "
+    "the MIT License. If a different license was selected, replace this appendix "
+    "with the exact repository license."
+)
+add_code(r'''
+MIT License
+
+Copyright (c) 2026 Flood Resilience & Response Platform Project Team
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+''')
+
+H1("Appendix H — Submission Verification Matrix")
+add_table(
+    [
+        ["Requirement", "Coverage in this document"],
+        ["Numbered TOC", "Sections 1–10 plus appendices."],
+        ["ASCII architecture", "Section 2 data-flow diagrams."],
+        ["Repository structure", "Section 3 and current GitHub snapshot."],
+        ["Feature workflows", "Section 4 with input, processing and output."],
+        ["Mathematical formulations", "Section 5 plus Appendix D.3."],
+        ["SQL / DDL", "Appendix D.1."],
+        ["RLS", "Appendix D.2."],
+        ["Environment variables", "Section 7 and Appendix F."],
+        ["Testing and guardrails", "Section 8."],
+        ["Deployment", "Section 9 and Appendix E."],
+        ["Changelog / roadmap", "Section 10."],
+        ["Troubleshooting / error log", "Section 10."],
+        ["License", "Section 10 and Appendix G, conditional on repository license."],
+    ],
+    [55*mm, 120*mm],
+    6.8
+)
+
 
 # ============================================================
 # BUILD PDF
